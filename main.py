@@ -138,7 +138,7 @@ class FPL:
                                          missing_list,
                                          len(self.new_participants_id),
                                          new_list
-                                         )
+                                         ).encode('utf-8')
 
         try:
             s = smtplib.SMTP('smtp.gmail.com', 587)
