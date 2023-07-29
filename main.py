@@ -5,6 +5,7 @@ import sys
 import json
 import smtplib
 import time
+from functools import reduce
 
 
 class Participant:
@@ -43,43 +44,51 @@ class FPL:
     def __init__(self, league_id: str):
         load_dotenv()
 
-        self.league_id = league_id
-        self.league_name = ''
-        self.missing_participants_id = []
-        self.new_participants_id = []
-        self.missing_participants_obj = []
-        self.new_participants_obj = []
-        self.response_results = []
-        self.league_url = f'https://fantasy.premierleague.com/api/leagues-classic/{self.league_id}/standings/'
+        self.league_id: str = league_id
+        self.league_name: str = ''
+        self.missing_participants_id: list = []
+        self.new_participants_id: list = []
+        self.all_participants_id: list = []
+        self.missing_participants_obj: dict = {}
+        self.new_participants_obj: dict = {}
+        self.all_participants_obj: dict = {}
+        self.response_results: list = []
+        self.league_url: str = f'https://fantasy.premierleague.com/api/leagues-classic/{self.league_id}/standings/'
 
         if sys.platform == "darwin":
-            current_subdir = os.getenv('MAC')
+            current_subdir: str = os.getenv('MAC')
         else:
-            current_subdir = os.getenv('LINUX')
+            current_subdir: str = os.getenv('LINUX')
 
-        self.email = os.getenv('EMAIL')
-        self.app_pw = os.getenv('APP_PW')
-        self.current_dir = os.path.expanduser('~') + current_subdir
-        self.participant_path = self.current_dir + f'participants_{league_id}.json'
+        self.email: str = os.getenv('EMAIL')
+        self.app_pw: str = os.getenv('APP_PW')
+        self.current_dir: str = os.path.expanduser('~') + current_subdir
+        self.participant_path: str = self.current_dir + f'participants_{league_id}.json'
 
         if os.path.exists(self.participant_path):
             with open(self.participant_path, 'r') as file:
-                self.current_participants_json = json.load(file)
+                self.current_participants_json: list = json.load(file)
         else:
             with open(self.participant_path, 'w') as file:
                 json.dump([], file)
-                self.current_participants_json = []
+                self.current_participants_json: list = []
+
+    def __str__(self):
+        return self.current_participants_json.__str__()
+
+    def __len__(self):
+        return len(self.current_participants_json)
 
     def fetch(self):
-        has_more = True
-        i = 1
+        has_more: bool = True
+        i: int = 1
 
         while has_more:
             if i == 800:
                 has_more = False
 
             response_raw = rq.get(self.league_url + f'?page_new_entries={i}&page_standings=1&phase=1')
-            response = response_raw.json()
+            response: json = response_raw.json()
 
             if self.league_name == '':
                 self.league_name = response['league']['name']
@@ -97,8 +106,8 @@ class FPL:
         self.missing_participants_id = []
         self.new_participants_id = []
 
-        response_entries = [entry['entry'] for entry in self.response_results]
-        missing_entries = [entry for entry in self.current_participants_json if entry['entry'] not in response_entries]
+        self.all_participants_id = [entry['entry'] for entry in self.response_results]
+        missing_entries = [entry for entry in self.current_participants_json if entry['entry'] not in self.all_participants_id]
         new_entries = [entry for entry in self.response_results
                        if not any(d['entry'] == entry['entry'] for d in self.current_participants_json)]
 
@@ -109,12 +118,35 @@ class FPL:
             self.new_participants_id.append(entry['entry'])
 
         if len(self.missing_participants_id) > 0 or len(self.new_participants_id) > 0:
-            self.missing_participants_obj = [Participant(entry) for entry in self.missing_participants_id]
-            self.new_participants_obj = [Participant(entry) for entry in self.new_participants_id]
+            self.missing_participants_obj = {entry: Participant(entry) for entry in self.missing_participants_id}
+            self.new_participants_obj = {entry: Participant(entry) for entry in self.new_participants_id}
+            self.all_participants_obj = {entry: Participant(entry) for entry in self.all_participants_id}
+
+            for participant in self.response_results:
+                participant['country'] = self.all_participants_obj[participant['entry']].country
 
             with open(self.participant_path, 'w') as file:
                 self.send_email()
                 json.dump(self.response_results, file)
+
+    def stats(self):
+        def count_countries(dictionary, parameter):
+            if 'country' in dictionary and dictionary['country'] == parameter:
+                return 1
+            return 0
+
+        unique_countries = set([x['country'] for x in self.current_participants_json])
+        num_unique_countries = len(unique_countries)
+        num_participants = len(self.current_participants_json)
+        print(f'Participating countries ({num_unique_countries}): {unique_countries}')
+
+        print(f'Whereas:')
+
+        for country in unique_countries:
+            num_in_country = sum(map(lambda d: count_countries(d, country), self.current_participants_json))
+            print(f'\t{country}: {num_in_country} ({round(num_in_country / num_participants * 100, 1)} %)')
+
+        print(f'\n\tTotal: {num_participants}')
 
     def send_email(self):
         missing_list = [f'{player.id}, ' \
@@ -122,14 +154,14 @@ class FPL:
                         f'{player.first_name},' \
                         f'{player.last_name}, ' \
                         f'{player.country}'
-                        for player in self.missing_participants_obj]
+                        for player in self.missing_participants_obj.values()]
 
         new_list = [f'{player.id}, ' \
                     f'{player.team_name}, ' \
                     f'{player.first_name}, ' \
                     f'{player.last_name}, ' \
                     f'{player.country}'
-                    for player in self.new_participants_obj]
+                    for player in self.new_participants_obj.values()]
 
         message = 'Subject: Change in league {}\n\nThe following {} ' \
                   'has left the league:{}\nThe following {} has joined ' \
@@ -157,5 +189,14 @@ if __name__ == '__main__':
         sys.exit()
 
     fpl = FPL(sys.argv[1])
-    fpl.fetch()
-    fpl.compare()
+
+    if len(sys.argv) == 2:
+        fpl.fetch()
+        fpl.compare()
+
+    if len(sys.argv) == 3:
+        if sys.argv[2] == 'dump':
+            print(fpl)
+
+        if sys.argv[2] == 'stats':
+            fpl.stats()
