@@ -188,6 +188,10 @@ if __name__ == '__main__':
         print('No league id provided')
         sys.exit()
 
+    if not sys.argv[1].isnumeric():
+        print('No league id provided')
+        sys.exit()
+
     fpl = FPL(sys.argv[1])
 
     if len(sys.argv) == 2:
