@@ -89,7 +89,7 @@ class Player:
             for gw in player_response['history']:
                 self.player_history.append(gw)
 
-            gw_summary = player_response['history'][-1]  # Replace -1 with gw logic
+            gw_summary = player_response['history'][fetcher_instance.gw - 1]
 
             self.opponent_team = int(gw_summary['opponent_team'])
             self.total_points = int(gw_summary['total_points'])
@@ -100,25 +100,25 @@ class Player:
             self.goals_scored = int(gw_summary['goals_scored'])
             self.assists = int(gw_summary['assists'])
             self.clean_sheets = int(gw_summary['clean_sheets'])
-            self.goals_conceded = int(player_response['history'][-1]['goals_conceded'])
-            self.own_goals = int(player_response['history'][-1]['own_goals'])
-            self.penalties_saved = int(player_response['history'][-1]['penalties_saved'])
-            self.penalties_missed = int(player_response['history'][-1]['penalties_missed'])
-            self.yellow_cards = int(player_response['history'][-1]['yellow_cards'])
-            self.red_cards = int(player_response['history'][-1]['red_cards'])
-            self.saves = int(player_response['history'][-1]['saves'])
-            self.bonus = int(player_response['history'][-1]['bonus'])
+            self.goals_conceded = int(gw_summary['goals_conceded'])
+            self.own_goals = int(gw_summary['own_goals'])
+            self.penalties_saved = int(gw_summary['penalties_saved'])
+            self.penalties_missed = int(gw_summary['penalties_missed'])
+            self.yellow_cards = int(gw_summary['yellow_cards'])
+            self.red_cards = int(gw_summary['red_cards'])
+            self.saves = int(gw_summary['saves'])
+            self.bonus = int(gw_summary['bonus'])
             self.bps = int(player_response['history'][-1]['bps'])
-            self.influence = float(player_response['history'][-1]['influence'])
-            self.creativity = float(player_response['history'][-1]['creativity'])
-            self.threat = float(player_response['history'][-1]['threat'])
-            self.ict_index = float(player_response['history'][-1]['ict_index'])
-            self.starts = int(player_response['history'][-1]['starts'])
-            self.expected_goals = float(player_response['history'][-1]['expected_goals'])
-            self.expected_assists = float(player_response['history'][-1]['expected_assists'])
-            self.expected_goal_involvements = float(player_response['history'][-1]['expected_goal_involvements'])
-            self.expected_goals_conceded = float(player_response['history'][-1]['expected_goals_conceded'])
-            self.value = int(player_response['history'][-1]['value'])
+            self.influence = float(gw_summary['influence'])
+            self.creativity = float(gw_summary['creativity'])
+            self.threat = float(gw_summary['threat'])
+            self.ict_index = float(gw_summary['ict_index'])
+            self.starts = int(gw_summary['starts'])
+            self.expected_goals = float(gw_summary['expected_goals'])
+            self.expected_assists = float(gw_summary['expected_assists'])
+            self.expected_goal_involvements = float(gw_summary['expected_goal_involvements'])
+            self.expected_goals_conceded = float(gw_summary['expected_goals_conceded'])
+            self.value = int(gw_summary['value'])
             self.uniqueness = fetcher_instance.df_unique[fetcher_instance.df_unique['player'] == element]['unique'].iloc[0]
         except:
             pass
