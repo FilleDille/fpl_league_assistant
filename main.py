@@ -82,25 +82,35 @@ class FPL:
     def fetch(self):
         has_more: bool = True
         i: int = 1
+        x: int = 1
+        more_new_entries: bool = True
+        more_old_entries: bool = True
 
         while has_more:
             if i == 800:
                 has_more = False
 
-            response_raw = rq.get(self.league_url + f'?page_new_entries={i}&page_standings=1&phase=1')
-            response: json = response_raw.json()
+            response: json = rq.get(self.league_url + f'?page_new_entries={i}&page_standings={x}&phase=1').json()
 
             if self.league_name == '':
                 self.league_name = response['league']['name']
 
             if len(response['new_entries']['results']) == 0:
-                has_more = False
+                more_new_entries = False
             else:
                 self.response_results = self.response_results + response['new_entries']['results']
+                i += 1
+
+            if len(response['standings']['results']) == 0:
+                more_old_entries = False
+            else:
+                self.response_results = self.response_results + response['standings']['results']
+                x += 1
+
+            if more_new_entries == False and more_old_entries == False:
+                has_more = False
 
             time.sleep(0.1)
-            i += 1
-
 
     def compare(self):
         self.missing_participants_id = []
