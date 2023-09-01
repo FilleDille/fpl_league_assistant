@@ -216,15 +216,6 @@ class Team:
             self.team_name: str = manager_response['name']
             self.country: str = manager_response['player_region_name']
             self.picks: dict = {x['element']: x['multiplier'] for x in fetcher_instance.pick_dict[entry]}
-            # self.uniqueness: float = round(
-            #     sum([
-            #         self.player_dict[k].uniqueness if v in (1, 0)
-            #         else
-            #         v * self.player_dict[k].uniqueness
-            #         for k, v in self.picks.items()]) / len(self.player_dict),
-            #     3
-            # )
-
 
             if manager_response['favourite_team'] is None:
                 self.favourite_team = None
