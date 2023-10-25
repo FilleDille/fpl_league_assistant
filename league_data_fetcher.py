@@ -10,6 +10,7 @@ class Fetcher:
     def __init__(self, time_sleep: float, league_id: int, gameweek: int):
         self.participants_dict: dict = {}
         self.pick_dict: dict = {}
+        self.entry_history: dict = {}
         self.player_dict: dict = {}
         self.team_dict: dict = {}
 
@@ -58,13 +59,16 @@ class Fetcher:
             participant_response: json = participant_response_raw.json()
 
             if participant_response_raw.status_code != 200:
-                print(f'Entry #{self.counter} not available, sleeping for {self.time_sleep} s')
+                print(f'Entry #{self.counter} not available, sleeping for 5 s')
+                time.sleep(5)
                 continue
 
             print(f'Status code: {participant_response_raw.status_code}')
             self.pick_dict[entry] = participant_response['picks']
             entry_picks = [player['element'] for player in participant_response['picks']]
             self.participants_dict[entry] = entry_picks
+
+            self.entry_history[entry] = participant_response['entry_history']
 
             print(f'Entry #{self.counter} saved, sleeping for {self.time_sleep} s')
             time.sleep(self.time_sleep)
@@ -216,6 +220,7 @@ class Team:
             self.team_name: str = manager_response['name']
             self.country: str = manager_response['player_region_name']
             self.picks: dict = {x['element']: x['multiplier'] for x in fetcher_instance.pick_dict[entry]}
+            self.event_transfers_cost: int = fetcher_instance.entry_history[entry]['event_transfers_cost']
 
             if manager_response['favourite_team'] is None:
                 self.favourite_team = None
