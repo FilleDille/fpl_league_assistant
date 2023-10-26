@@ -167,7 +167,7 @@ class Player:
             self.wrl = 0
         else:
             self.opponent_team = int(gw_summary['opponent_team'])
-            self.total_points = int(gw_summary['total_points'])
+            self.points = int(gw_summary['total_points'])
             self.was_home = int(gw_summary['was_home'])
             self.team_h_score = int(gw_summary['team_h_score'])
             self.team_a_score = int(gw_summary['team_a_score'])
@@ -221,6 +221,9 @@ class Team:
             self.country: str = manager_response['player_region_name']
             self.picks: dict = {x['element']: x['multiplier'] for x in fetcher_instance.pick_dict[entry]}
             self.event_transfers_cost: int = fetcher_instance.entry_history[entry]['event_transfers_cost']
+            self.points: int = fetcher_instance.entry_history[entry]['points']
+            self.total_points: int = fetcher_instance.entry_history[entry]['total_points']
+            self.points_on_bench: int = fetcher_instance.entry_history[entry]['points_on_bench']
 
             if manager_response['favourite_team'] is None:
                 self.favourite_team = None
