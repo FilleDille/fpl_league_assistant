@@ -2,48 +2,48 @@ import pandas as pd
 import requests as rq
 import json
 import time
-from functools import reduce
+
 
 class Fetcher:
     position_dict: dict = {1: 'GOAL', 2: 'DEF', 3: 'MID', 4: 'FWD'}
 
-    def __init__(self, time_sleep: float, league_id: int, gameweek: int):
-        self.participants_dict: dict = {}
+    def __init__(self, time_sleep: float, league_id: int, gw: int):
         self.pick_dict: dict = {}
-        self.entry_history: dict = {}
+        self.chip_dict: dict = {}
+        self.entry_dict: dict = {}
         self.player_dict: dict = {}
-        self.team_dict: dict = {}
-
-        self.time_sleep = time_sleep
-        self.league_id = league_id
-        self.gw = gameweek
-        self.counter = 1
+        self.record_list: list = []
+        self.player_set: set = set()
+        self.gw: int = gw
+        self.time_sleep: float = time_sleep
+        self.league_id: int = league_id
 
         url_bootstrap = 'https://fantasy.premierleague.com/api/bootstrap-static/'
         url_league = f'https://fantasy.premierleague.com/api/leagues-classic/{self.league_id}/standings/'
 
         self.bootstrap: json = rq.get(url_bootstrap).json()
-        self.df_teams = pd.DataFrame(self.bootstrap['teams'])
-        self.df_players = pd.DataFrame(self.bootstrap['elements'])
-        self.df_all = pd.merge(self.df_teams, self.df_players, left_on='id', right_on='team')
+        self.df_all = pd.merge(pd.DataFrame(self.bootstrap['teams']), pd.DataFrame(self.bootstrap['elements']), left_on='id', right_on='team')
+        self.team_dict = {x['id']: x['name'] for x in self.bootstrap['teams']}
 
         has_more: bool = True
+        counter: int = 1
         x: int = 1
         more_old_entries: bool = True
-        self.response_results: list = []
+        response_results: list = []
+        gw_index_list: list = list(range(1, self.gw + 1))
 
         while has_more:
-            self.league_response_raw: json = rq.get(url_league + f'?page_new_entries=1&page_standings={x}&phase=1')
-            print(f'Status code: {self.league_response_raw.status_code}')
-            self.league_response: json = self.league_response_raw.json()
+            league_response_raw: json = rq.get(url_league + f'?page_new_entries=1&page_standings={x}&phase=1')
+            print(f'Status code: {league_response_raw.status_code}')
+            league_response: json = league_response_raw.json()
 
-            if len(self.league_response['standings']['results']) == 0:
+            if len(league_response['standings']['results']) == 0:
                 more_old_entries = False
             else:
-                self.response_results = self.response_results + self.league_response['standings']['results']
+                response_results = response_results + league_response['standings']['results']
                 x += 1
 
-            if more_old_entries == False:
+            if not more_old_entries:
                 has_more = False
 
             print(f'Page #{x - 1} saved, sleeping for {self.time_sleep} s')
@@ -51,72 +51,175 @@ class Fetcher:
 
         print('Fetching league entries')
 
-        for p in self.response_results:
-            entry = p['entry']
-            participant_url = f'https://fantasy.premierleague.com/api/entry/{entry}/event/{self.gw}/picks/'
+        for entry_summary in response_results:
+            entry = entry_summary['entry']
+            self.entry_dict[entry] = {}
+            self.pick_dict[entry] = {}
+            self.chip_dict[entry] = {}
 
-            participant_response_raw = rq.get(participant_url)
-            participant_response: json = participant_response_raw.json()
+            for i in gw_index_list:
+                entry_url = f'https://fantasy.premierleague.com/api/entry/{entry}/event/{i}/picks/'
 
-            if participant_response_raw.status_code != 200:
-                print(f'Entry #{self.counter} not available, sleeping for 5 s')
-                time.sleep(5)
-                continue
+                if not (entry_response := fetch_participant(entry_url, self.time_sleep)):
+                    continue
 
-            print(f'Status code: {participant_response_raw.status_code}')
-            self.pick_dict[entry] = participant_response['picks']
-            entry_picks = [player['element'] for player in participant_response['picks']]
-            self.participants_dict[entry] = entry_picks
+                self.pick_dict[entry][i] = entry_response['picks']
+                self.chip_dict[entry][i] = entry_response['active_chip']
+                self.player_set.update([player['element'] for player in entry_response['picks']])
+                self.entry_dict[entry][i] = entry_response['entry_history']
 
-            self.entry_history[entry] = participant_response['entry_history']
+                print(f'Entry #{counter} saved, sleeping for {self.time_sleep} s')
+                time.sleep(self.time_sleep)
+                counter += 1
 
-            print(f'Entry #{self.counter} saved, sleeping for {self.time_sleep} s')
+        counter = 1
+
+        for player in self.player_set:
+            self.player_dict[player] = Player(self, player)
+            print(f'Player #{counter} created, sleeping for {self.time_sleep} s')
             time.sleep(self.time_sleep)
-            self.counter += 1
+            counter += 1
 
-        self.entry_element_tuple = [(key, value) for key, values in self.participants_dict.items() for value in values]
+        counter = 1
+        entry_set = set(self.entry_dict.keys())
 
-        self.df_melted_players = pd.DataFrame(self.entry_element_tuple, columns=['entry', 'player'])
-        self.df_groupby = self.df_melted_players.groupby('player').count().sort_values('entry', ascending=False)
-        self.df_groupby['unique'] = 1 - (self.df_groupby['entry'] - 1) / (len(self.participants_dict) - 1)
-        self.df_unique = self.df_melted_players.merge(self.df_groupby.drop('entry', axis=1), on='player', how='left')
+        for entry in entry_set:
+            for i in gw_index_list:
+                record_status = "failed"
 
-        self.counter = 1
+                try:
+                    temp_entry_dict = self.entry_dict[entry][i]
+                    temp_pick_dict = self.pick_dict[entry][i]
+                    temp_chip_dict = self.chip_dict[entry][i]
+                except Exception as e:
+                    print(e)
+                    print(f'Record #{counter} for team {entry} gw {i} {record_status}, sleeping for {self.time_sleep} s')
+                    time.sleep(self.time_sleep)
+                    counter += 1
+                    continue
 
-        for p in self.df_groupby.reset_index()['player']:
-            self.player_dict[p] = Player(self, p)
-            print(f'Player #{self.counter} created, sleeping for {self.time_sleep} s')
-            time.sleep(self.time_sleep)
-            self.counter += 1
+                temp_record = Record(self, entry, temp_entry_dict, temp_pick_dict, temp_chip_dict, i)
 
-        self.counter = 1
+                if temp_record.successful:
+                    self.record_list.append(temp_record)
+                    record_status = "created"
 
-        for k, v in self.participants_dict.items():
-            temp_team = Team(self, k)
-
-            if temp_team.successful:
-                self.team_dict[k] = temp_team
-                print(f'Team #{self.counter} created, sleeping for {self.time_sleep} s')
-            else:
-                print(f'Team #{self.counter} failed, sleeping for {self.time_sleep} s')
-
-            time.sleep(self.time_sleep)
-            self.counter += 1
+                print(f'Record #{counter} for team {entry} gw {i} {record_status}, sleeping for {self.time_sleep} s')
+                time.sleep(self.time_sleep)
+                counter += 1
 
         print('Fetching complete')
+
+        print('Creating a DataFrames')
+
+        dict_list = [
+            {
+                'gw': record.gw,
+                'entry': record.entry,
+                'first_name': record.first_name,
+                'second_name': record.second_name,
+                'team_name': record.team_name,
+                'favourite_team': record.favourite_team,
+                'country': record.country,
+                'points': record.points,
+                'total_points': record.total_points,
+                'points_on_bench': record.points_on_bench,
+                'value': record.value,
+                'value_ex_bank': record.value_ex_bank,
+                'bank': record.bank,
+                'event_transfers': record.event_transfers,
+                'event_transfers_cost': record.event_transfers_cost,
+                'rank': record.rank,
+                'chip': record.chip,
+                'def_count': record.def_count,
+                'mid_count': record.mid_count,
+                'fwd_count': record.fwd_count,
+                'captain_entry': record.captain_entry,
+                'captain_name': record.captain_name,
+                'captain_position': record.captain_position,
+                'captain_points': record.captain_points,
+                'minutes': record.minutes,
+                'was_home': record.was_home,
+                'assists': record.assists,
+                'goals_scored': record.goals_scored,
+                'clean_sheets': record.clean_sheets,
+                'goals_conceded': record.goals_conceded,
+                'own_goals': record.own_goals,
+                'penalties_saved': record.penalties_saved,
+                'penalties_missed': record.penalties_missed,
+                'yellow_cards': record.yellow_cards,
+                'red_cards': record.red_cards,
+                'saves': record.saves,
+                'bonus': record.bonus,
+                'bps': record.bps,
+                'influence': record.influence,
+                'creativity': record.creativity,
+                'threat': record.threat,
+                'ict_index': record.ict_index,
+                'starts': record.starts,
+                'expected_goals': record.expected_goals,
+                'expected_assists': record.expected_assists,
+                'expected_goal_involvements': record.expected_goal_involvements,
+                'expected_goals_conceded': record.expected_goals_conceded
+            }
+            for record in self.record_list
+        ]
+
+        self.df = pd.DataFrame(dict_list)
+
+        self.df['acc_points_on_bench'] = self.df.groupby('entry')['points_on_bench'].cumsum()
+        self.df['acc_event_transfers'] = self.df.groupby('entry')['event_transfers'].cumsum()
+        self.df['acc_event_transfers_cost'] = self.df.groupby('entry')['event_transfers_cost'].cumsum()
+        self.df['mean_def_count'] = self.df.groupby('entry')['def_count'].cumsum() / self.df['gw']
+        self.df['mean_mid_count'] = self.df.groupby('entry')['mid_count'].cumsum() / self.df['gw']
+        self.df['mean_fwd_count'] = self.df.groupby('entry')['fwd_count'].cumsum() / self.df['gw']
+        self.df['acc_captain_points'] = self.df.groupby('entry')['captain_points'].cumsum()
+        self.df['acc_minutes'] = self.df.groupby('entry')['minutes'].cumsum()
+        self.df['acc_was_home'] = self.df.groupby('entry')['was_home'].cumsum()
+        self.df['acc_assists'] = self.df.groupby('entry')['assists'].cumsum()
+        self.df['acc_goals_scored'] = self.df.groupby('entry')['goals_scored'].cumsum()
+        self.df['acc_clean_sheets'] = self.df.groupby('entry')['clean_sheets'].cumsum()
+        self.df['acc_goals_conceded'] = self.df.groupby('entry')['goals_conceded'].cumsum()
+        self.df['acc_own_goals'] = self.df.groupby('entry')['own_goals'].cumsum()
+        self.df['acc_penalties_saved'] = self.df.groupby('entry')['penalties_saved'].cumsum()
+        self.df['acc_penalties_missed'] = self.df.groupby('entry')['penalties_missed'].cumsum()
+        self.df['acc_yellow_cards'] = self.df.groupby('entry')['yellow_cards'].cumsum()
+        self.df['acc_red_cards'] = self.df.groupby('entry')['red_cards'].cumsum()
+        self.df['acc_saves'] = self.df.groupby('entry')['saves'].cumsum()
+        self.df['acc_bonus'] = self.df.groupby('entry')['bonus'].cumsum()
+        self.df['acc_bps'] = self.df.groupby('entry')['bps'].cumsum()
+        self.df['acc_influence'] = self.df.groupby('entry')['influence'].cumsum()
+        self.df['acc_creativity'] = self.df.groupby('entry')['creativity'].cumsum()
+        self.df['acc_threat'] = self.df.groupby('entry')['threat'].cumsum()
+        self.df['acc_ict_index'] = self.df.groupby('entry')['ict_index'].cumsum()
+        self.df['acc_starts'] = self.df.groupby('entry')['starts'].cumsum()
+        self.df['acc_expected_goals'] = self.df.groupby('entry')['expected_goals'].cumsum()
+        self.df['acc_expected_assists'] = self.df.groupby('entry')['expected_assists'].cumsum()
+        self.df['acc_expected_goal_involvements'] = self.df.groupby('entry')['expected_goal_involvements'].cumsum()
+        self.df['acc_expected_goals_conceded'] = self.df.groupby('entry')['expected_goals_conceded'].cumsum()
+
+        self.df['acc_goals_luck'] = self.df['acc_goals_scored'] - self.df['acc_expected_goals']
+        self.df['acc_assists_luck'] = self.df['acc_assists'] - self.df['acc_expected_assists']
+        self.df['acc_goals_conceded_luck'] = self.df['acc_goals_conceded'] - self.df['acc_expected_goals_conceded']
+        self.df['acc_goal_involvements_luck'] = self.df['acc_goals_scored'] + self.df['acc_assists'] - self.df['acc_expected_goal_involvements']
+
+        self.df_last = self.df.copy(True)
+        self.df_last = self.df_last[self.df_last['gw'] == self.df['gw'].max()]
+        self.df_last['league_rank'] = self.df_last['total_points'].rank(ascending=False, method='min')
+        self.df_last.sort_values(by='league_rank', ascending=True, inplace=True)
+
+        print('DataFrames complete')
 
 
 class Player:
     def __init__(self, fetcher_instance: Fetcher, element: int):
-        self.player_history: list = []
-        gw_summary = None
+        self.player_history: dict = {}
 
         filtered_df = fetcher_instance.df_all[fetcher_instance.df_all['id_y'] == element]
         self.team_name = filtered_df['name'].iloc[0]
         self.first_name = filtered_df['first_name'].iloc[0]
         self.second_name = filtered_df['second_name'].iloc[0]
         self.position = fetcher_instance.position_dict[int(filtered_df['element_type'].iloc[0])]
-        self.xp = float(filtered_df['ep_this'].iloc[0])
 
         player_url = f'https://fantasy.premierleague.com/api/element-summary/{element}/'
         player_response_raw = rq.get(player_url)
@@ -128,134 +231,145 @@ class Player:
             return
 
         for gw in player_response['history']:
-            self.player_history.append(gw)
-
-            if gw['round'] == fetcher_instance.gw:
-                gw_summary = gw
-
-        if gw_summary is None:
-            self.opponent_team = None
-            self.total_points = 0
-            self.was_home = 0
-            self.team_h_score = 0
-            self.team_a_score = 0
-            self.minutes = 0
-            self.goals_scored = 0
-            self.assists = 0
-            self.clean_sheets = 0
-            self.goals_conceded = 0
-            self.own_goals = 0
-            self.penalties_saved = 0
-            self.penalties_missed = 0
-            self.yellow_cards = 0
-            self.red_cards = 0
-            self.saves = 0
-            self.bonus = 0
-            self.bps = 0
-            self.influence = 0
-            self.creativity = 0
-            self.threat = 0
-            self.ict_index = 0
-            self.starts = 0
-            self.expected_goals = 0
-            self.expected_assists = 0
-            self.expected_goal_involvements = 0
-            self.expected_goals_conceded = 0
-            self.value = 0
-            self.uniqueness = 0
-            self.wrc = 0
-            self.wrl = 0
-        else:
-            self.opponent_team = int(gw_summary['opponent_team'])
-            self.points = int(gw_summary['total_points'])
-            self.was_home = int(gw_summary['was_home'])
-            self.team_h_score = int(gw_summary['team_h_score'])
-            self.team_a_score = int(gw_summary['team_a_score'])
-            self.minutes = int(gw_summary['minutes'])
-            self.goals_scored = int(gw_summary['goals_scored'])
-            self.assists = int(gw_summary['assists'])
-            self.clean_sheets = int(gw_summary['clean_sheets'])
-            self.goals_conceded = int(gw_summary['goals_conceded'])
-            self.own_goals = int(gw_summary['own_goals'])
-            self.penalties_saved = int(gw_summary['penalties_saved'])
-            self.penalties_missed = int(gw_summary['penalties_missed'])
-            self.yellow_cards = int(gw_summary['yellow_cards'])
-            self.red_cards = int(gw_summary['red_cards'])
-            self.saves = int(gw_summary['saves'])
-            self.bonus = int(gw_summary['bonus'])
-            self.bps = int(player_response['history'][-1]['bps'])
-            self.influence = float(gw_summary['influence'])
-            self.creativity = float(gw_summary['creativity'])
-            self.threat = float(gw_summary['threat'])
-            self.ict_index = float(gw_summary['ict_index'])
-            self.starts = int(gw_summary['starts'])
-            self.expected_goals = float(gw_summary['expected_goals'])
-            self.expected_assists = float(gw_summary['expected_assists'])
-            self.expected_goal_involvements = float(gw_summary['expected_goal_involvements'])
-            self.expected_goals_conceded = float(gw_summary['expected_goals_conceded'])
-            self.value = int(gw_summary['value'])
-            self.uniqueness = float(
-                fetcher_instance.df_unique[fetcher_instance.df_unique['player'] == element]['unique'].iloc[0])
-            self.wrc = self.uniqueness * self.xp  # weighted relative contribution
-            self.wrl = (1 - self.uniqueness) * self.xp  # weighted relative loss
+            self.player_history[gw['round']] = gw
 
 
-class Team:
-    def __init__(self, fetcher_instance: Fetcher, entry: int):
+class Record:
+    def __init__(self, fetcher_instance: Fetcher, entry: int, entry_dict: dict, pick_list: list, chip: str, gw: int):
         self.successful: bool = True
+        manager_url = f'https://fantasy.premierleague.com/api/entry/{entry}/'
+        self.fetcher_instance = fetcher_instance
+
+        if not (manager_response := fetch_participant(manager_url, fetcher_instance.time_sleep)):
+            self.successful = False
+            return
 
         try:
-            manager_url = f'https://fantasy.premierleague.com/api/entry/{entry}/'
-            manager_response_raw = rq.get(manager_url)
-            manager_response: json = manager_response_raw.json()
+            captain_dict = list(filter(lambda p: p['multiplier'] in (2, 3), pick_list))[0]
+            captain_multiplier = captain_dict['multiplier']
+            player_dict_captain: Player = fetcher_instance.player_dict[captain_dict['element']]
+            self.players_played_list: list = [x['element'] for x in list(filter(lambda p: p['multiplier'] != 0, pick_list))]
 
-            print(f'Status code: {manager_response_raw.status_code}')
-
+            self.gw: int = gw
             self.entry: int = entry
-            self.df_unique = fetcher_instance.df_unique[fetcher_instance.df_unique['entry'] == entry]
-            self.player_list: list = [p for p in self.df_unique['player']]
-            self.player_dict: dict = {p: fetcher_instance.player_dict[p] for p in self.player_list}
             self.first_name: str = manager_response['player_first_name']
             self.second_name: str = manager_response['player_last_name']
             self.team_name: str = manager_response['name']
-            self.country: str = manager_response['player_region_name']
-            self.picks: dict = {x['element']: x['multiplier'] for x in fetcher_instance.pick_dict[entry]}
-            self.event_transfers_cost: int = fetcher_instance.entry_history[entry]['event_transfers_cost']
-            self.points: int = fetcher_instance.entry_history[entry]['points']
-            self.total_points: int = fetcher_instance.entry_history[entry]['total_points']
-            self.points_on_bench: int = fetcher_instance.entry_history[entry]['points_on_bench']
 
-            if manager_response['favourite_team'] is None:
+            if (favourite_team_id := manager_response['favourite_team']) is None:
                 self.favourite_team = None
             else:
-                self.favourite_team = fetcher_instance.df_teams[fetcher_instance.df_teams['id'] == manager_response['favourite_team']]['name'].iloc[0]
+                self.favourite_team = fetcher_instance.team_dict[favourite_team_id]
+
+            self.country: str = manager_response['player_region_name']
+            self.points: int = entry_dict['points']
+            self.total_points: int = entry_dict['total_points']
+            self.points_on_bench: int = entry_dict['points_on_bench']
+            self.value: int = entry_dict['value']
+            self.value_ex_bank: int = int(entry_dict['value']) - (entry_dict['bank'])
+            self.bank: int = entry_dict['bank']
+            self.event_transfers: int = entry_dict['event_transfers']
+            self.event_transfers_cost: int = entry_dict['event_transfers_cost']
+            self.rank: int = entry_dict['rank']
+            self.chip: str = chip
+            self.def_count = sum([1 if fetcher_instance.player_dict[x].position == 'DEF' else 0 for x in
+                                  self.players_played_list])
+            self.mid_count = sum([1 if fetcher_instance.player_dict[x].position == 'MID' else 0 for x in
+                                  self.players_played_list])
+            self.fwd_count = sum([1 if fetcher_instance.player_dict[x].position == 'FWD' else 0 for x in
+                                  self.players_played_list])
+            self.captain_entry: int = captain_dict['element']
+            self.captain_name: str = player_dict_captain.first_name + ' ' + player_dict_captain.second_name
+            self.captain_position: str = player_dict_captain.position
+            self.captain_points: int = player_dict_captain.player_history[gw]['total_points'] * captain_multiplier
+
+            self.minutes: int = self.aggregate('minutes', 'sum', gw)
+            self.was_home: int = self.aggregate('was_home', 'sum', gw)
+            self.assists: int = self.aggregate('assists', 'sum', gw)
+            self.goals_scored: int = self.aggregate('goals_scored', 'sum', gw)
+            self.clean_sheets: int = self.aggregate('clean_sheets', 'sum', gw)
+            self.goals_conceded: int = self.aggregate('goals_conceded', 'sum', gw)
+            self.own_goals: int = self.aggregate('own_goals', 'sum', gw)
+            self.penalties_saved: int = self.aggregate('penalties_saved', 'sum', gw)
+            self.penalties_missed: int = self.aggregate('penalties_missed', 'sum', gw)
+            self.yellow_cards: int = self.aggregate('yellow_cards', 'sum', gw)
+            self.red_cards: int = self.aggregate('red_cards', 'sum', gw)
+            self.saves: int = self.aggregate('saves', 'sum', gw)
+            self.bonus: int = self.aggregate('bonus', 'sum', gw)
+            self.bps: int = self.aggregate('bps', 'sum', gw)
+            self.influence: float = self.aggregate('influence', 'sum', gw)
+            self.creativity: float = self.aggregate('creativity', 'sum', gw)
+            self.threat: float = self.aggregate('threat', 'sum', gw)
+            self.ict_index: float = self.aggregate('ict_index', 'sum', gw)
+            self.starts: int = self.aggregate('starts', 'sum', gw)
+            self.expected_goals: float = self.aggregate('expected_goals', 'sum', gw)
+            self.expected_assists: float = self.aggregate('expected_assists', 'sum', gw)
+            self.expected_goal_involvements: float = self.aggregate('expected_goal_involvements', 'sum', gw)
+            self.expected_goals_conceded: float = self.aggregate('expected_goals_conceded', 'sum', gw)
         except Exception as e:
             print(e)
             self.successful = False
 
-    def aggregate(self, attribute_name: str, agg: str):
+    def aggregate(self, attribute_name: str, agg: str, gw: int):
         try:
+            attribute_values = [
+                round(float(y), 2) if isinstance(y, str) else int(y)
+                for x in self.players_played_list
+                for y in [self.fetcher_instance.player_dict[x].player_history[gw][attribute_name] if gw in self.fetcher_instance.player_dict[x].player_history else None]
+                if y is not None
+            ]
+
+            sum_attributes = sum(attribute_values)
+            max_attributes = max(attribute_values)
+            min_attributes = min(attribute_values)
+
             if agg == 'sum':
-                return sum([getattr(player[1], attribute_name) for player in self.player_dict.items()])
+                return sum_attributes
 
             if agg == 'mean':
-                attribute_values = [getattr(player[1], attribute_name) for player in self.player_dict.items()]
-                total = sum(attribute_values)
-                return round(total / len(attribute_values), 1) if len(attribute_values) > 0 else 0
+                return round(sum_attributes / len(attribute_values), 1) if len(attribute_values) > 0 else 0
 
             if agg == 'median':
-                attribute_values = [getattr(player[1], attribute_name) for player in self.player_dict.items()]
                 attribute_values.sort()
                 return round(attribute_values[int(len(attribute_values) / 2 - 1)], 1) if \
                     len(attribute_values) % 2 == 1 else \
                     sum(attribute_values[int(len(attribute_values) // 2 - 1):int(len(attribute_values) // 2 + 1)]) / 2
 
             if agg == 'max':
-                return max([getattr(player[1], attribute_name) for player in self.player_dict.items()])
+                return max_attributes
 
             if agg == 'min':
-                return min([getattr(player[1], attribute_name) for player in self.player_dict.items()])
+                return min_attributes
 
-            raise ValueError(f"Unrecognized aggregation function: '{agg}'")
+            raise Exception(f"Unrecognized aggregation function: '{agg}'")
         except Exception as e:
             raise AttributeError(e)
+
+
+def fetch_participant(entry_url, time_sleep):
+    counter: int = 1
+    continue_flag: bool = False
+    retry_flag: bool = False
+
+    entry_response_raw = rq.get(entry_url)
+    entry_response: json = entry_response_raw.json()
+    print(f'Status code: {entry_response_raw.status_code}')
+
+    while not continue_flag:
+        if entry_response_raw.status_code == 200:
+            continue_flag = True
+            continue
+
+        if retry_flag:
+            print(f'Entry #{counter} not available, sleeping for {time_sleep} s and continuing')
+            time.sleep(time_sleep)
+            return False
+
+        print(f'Entry #{counter} failed to fetch, sleeping for 5 s and retrying')
+        time.sleep(5)
+        participant_response_raw = rq.get(entry_url)
+        entry_response: json = participant_response_raw.json()
+        print(f'Status code: {participant_response_raw.status_code}')
+        retry_flag = True
+
+    return entry_response
