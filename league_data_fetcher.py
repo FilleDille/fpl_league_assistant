@@ -2,6 +2,7 @@ import pandas as pd
 import requests as rq
 import json
 import time
+from functools import cache
 
 
 class Fetcher:
@@ -33,9 +34,11 @@ class Fetcher:
         gw_index_list: list = list(range(1, self.gw + 1))
 
         while has_more:
-            league_response_raw: json = rq.get(url_league + f'?page_new_entries=1&page_standings={x}&phase=1')
-            print(f'Status code: {league_response_raw.status_code}')
-            league_response: json = league_response_raw.json()
+            url_league_formatted: str = url_league + f'?page_new_entries=1&page_standings={x}&phase=1'
+
+            if not (league_response := fetch_response(url_league_formatted, self.time_sleep)):
+                self.successful = False
+                return
 
             if len(league_response['standings']['results']) == 0:
                 more_old_entries = False
@@ -60,7 +63,7 @@ class Fetcher:
             for i in gw_index_list:
                 entry_url = f'https://fantasy.premierleague.com/api/entry/{entry}/event/{i}/picks/'
 
-                if not (entry_response := fetch_participant(entry_url, self.time_sleep)):
+                if not (entry_response := fetch_response(entry_url, self.time_sleep)):
                     continue
 
                 self.pick_dict[entry][i] = entry_response['picks']
@@ -222,10 +225,10 @@ class Player:
         self.position = fetcher_instance.position_dict[int(filtered_df['element_type'].iloc[0])]
 
         player_url = f'https://fantasy.premierleague.com/api/element-summary/{element}/'
-        player_response_raw = rq.get(player_url)
-        player_response: json = player_response_raw.json()
 
-        print(f'Status code: {player_response_raw.status_code}')
+        if not (player_response := fetch_response(player_url, fetcher_instance.time_sleep)):
+            self.successful = False
+            return
 
         if len(player_response['history']) == 0:
             return
@@ -240,7 +243,7 @@ class Record:
         manager_url = f'https://fantasy.premierleague.com/api/entry/{entry}/'
         self.fetcher_instance = fetcher_instance
 
-        if not (manager_response := fetch_participant(manager_url, fetcher_instance.time_sleep)):
+        if not (manager_response := fetch_response(manager_url, fetcher_instance.time_sleep)):
             self.successful = False
             return
 
@@ -346,13 +349,13 @@ class Record:
             raise AttributeError(e)
 
 
-def fetch_participant(entry_url, time_sleep):
+@cache
+def fetch_response(entry_url, time_sleep):
     counter: int = 1
     continue_flag: bool = False
     retry_flag: bool = False
 
     entry_response_raw = rq.get(entry_url)
-    entry_response: json = entry_response_raw.json()
     print(f'Status code: {entry_response_raw.status_code}')
 
     while not continue_flag:
@@ -368,8 +371,8 @@ def fetch_participant(entry_url, time_sleep):
         print(f'Entry #{counter} failed to fetch, sleeping for 5 s and retrying')
         time.sleep(5)
         participant_response_raw = rq.get(entry_url)
-        entry_response: json = participant_response_raw.json()
         print(f'Status code: {participant_response_raw.status_code}')
         retry_flag = True
 
+    entry_response: json = entry_response_raw.json()
     return entry_response
