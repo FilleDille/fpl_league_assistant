@@ -375,4 +375,4 @@ def fetch_response(entry_url, time_sleep):
         retry_flag = True
 
     entry_response: json = entry_response_raw.json()
-    return entry_response # hej joel
+    return entry_response # hej joel och hej amanda
